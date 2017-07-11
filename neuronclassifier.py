@@ -42,22 +42,23 @@ class NeuronModel:
     def save(self, filepath):
         self._model.save(filepath)
 
-    def generator(self, inputs, targets,
+    def generator(self, inputs_filenames, targets_filenames,
                   bounding_box_size=input_shape,
-                  search_box_size=(5, 5, 5),
                   rotation_range=0, brightness_range=0,
                   contrast_range=0):
-        (L, W, H) = bounding_box_size
-        (a, b, c) = search_box_size
-        [x, y, z] = [0, 0, 0]
         while True:
-            [x, y, z] = self.get_box(targets, [x, y, z], bounding_box_size)
-            subtargets = targets[z:z+a, y:y+a, x:x+c]
-            mean = subtargets.mean()
-            if mean < 0.90 and mean > 0.10:
-                subtargets = targets[z:z+L, y:y+H, x:x+W]
-                subinputs = inputs[z:z+L, y:y+H, x:x+W]
-                yield (subinputs, subtargets)
+            for inputs_filename, targets_filename in zip(inputs_filenames,
+                                                         targets_filenames):
+                inputs = self.load_tif(inputs_filename)
+                targets = self.load_tif(targets_filename)
+                for box in self.boxes(targets, bounding_box_size):
+                    ([x1, y1, z1], [x2, y2, z2]) = box
+                    subtargets = targets[z1:z2, y1:y2, x1:x2]
+                    mean = subtargets.mean()
+                    if mean < 0.95 and mean > 0.05:
+                        subtargets = targets[z1:z2, y1:y2, x1:x2]
+                        subinputs = inputs[z1:z2, y1:y2, x1:x2]
+                        yield (subinputs, subtargets)
 
     def load_tif(self, filename, dtype=None):
         if dtype is None:
@@ -65,19 +66,21 @@ class NeuronModel:
         else:
             return io.imread(filename).astype(dtype)
 
-    def get_box(self, data, coordinates, bounding_box_size):
-        [x, y, z] = coordinates
+    def boxes(self, data, bounding_box_size):
+        [x, y, z] = [0, 0, 0]
         (L, H, W) = bounding_box_size
-        x += W
-        if x + W > data.shape[2]:
-            x = 0
-            y += H
-        if y + H > data.shape[1]:
-            y = 0
-            z += L
-        if z + L > data.shape[0]:
-            z = 0
-        return [x, y, z]
+        while True:
+            x += W
+            if x + W > data.shape[2]:
+                x = 0
+                y += H
+            if y + H > data.shape[1]:
+                y = 0
+                z += L
+            if z + L > data.shape[0]:
+                z = 0
+                raise StopIteration
+            yield ([x, y, z], [x+W, y+H, z+L])
 
 
 def main():
