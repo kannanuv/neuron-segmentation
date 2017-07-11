@@ -1,24 +1,25 @@
-import numpy as np
+#!/usr/bin/env python
 from skimage import io
 import keras
 from keras.models import Sequential, load_model
 from keras.layers import (Dense, Dropout, Activation, Flatten,
                           Conv3D, MaxPooling3D)
+import argparse
 
 
 class NeuronModel:
     """
     """
-    input_shape = (50, 50, 50, 1)
+    def __init__(self, input_shape=(8, 16, 16, 1)):
+        self.input_shape = input_shape
 
-    def __init__(self, input_shape=(50, 50, 50, 1)):
         self._model = Sequential()
-        self._model.add(Conv3D(16, (5, 5, 1), padding='valid',
+        self._model.add(Conv3D(16, (1, 5, 5), padding='valid',
                                input_shape=input_shape))
         self._model.add(Activation('relu'))
         self._model.add(Conv3D(16, (3, 3, 3), padding='valid'))
         self._model.add(Activation('relu'))
-        self._model.add(Conv3D(16, (5, 5, 1), padding='valid'))
+        self._model.add(Conv3D(16, (1, 5, 5), padding='valid'))
         self._model.add(Activation('relu'))
         self._model.add(Conv3D(16, (3, 3, 3), padding='valid'))
         self._model.add(Activation('relu'))
@@ -30,8 +31,12 @@ class NeuronModel:
         self._model.compile(loss='binary_crossentropy', optimizer='Adam',
                             metrics=['accuracy'])
 
-    def fit(self, generator, steps_per_epoch):
-        self._model.fit_generator(generator, steps_per_epoch)
+    def fit(self, generator, steps_per_epoch=32):
+        self._model.fit_generator(generator, steps_per_epoch,
+                                  epochs=100,
+                                  validation_split=0.1,
+                                  class_weight={0: 1, 1: 1.5},
+                                  verbose=1)
 
     def evaluate(self, generator, steps_per_epoch):
         self._model.evaluate_generator(generator, steps_per_epoch)
@@ -43,7 +48,6 @@ class NeuronModel:
         self._model.save(filepath)
 
     def generator(self, inputs_filenames, targets_filenames,
-                  bounding_box_size=input_shape,
                   rotation_range=0, brightness_range=0,
                   contrast_range=0):
         while True:
@@ -51,6 +55,7 @@ class NeuronModel:
                                                          targets_filenames):
                 inputs = self.load_tif(inputs_filename)
                 targets = self.load_tif(targets_filename)
+                bounding_box_size = self.input_shape[0:3]
                 for box in self.boxes(targets, bounding_box_size):
                     ([x1, y1, z1], [x2, y2, z2]) = box
                     subtargets = targets[z1:z2, y1:y2, x1:x2]
@@ -83,20 +88,27 @@ class NeuronModel:
             yield ([x, y, z], [x+W, y+H, z+L])
 
 
-def main():
-    NEURON_TRAINING_PATH = []
-    NEURON_TEST_PATH = []
+def test():
+    TRAINING_INPUTS = ['training/inputs.tif']
+    TRAINING_TARGETS = ['training/targets.tif']
+
+    TEST_INPUTS = ['test/inputs.tif']
+    TEST_TARGETS = ['test/targets.tif']
 
     nn = NeuronModel()
 
-    for dataset_path in NEURON_TRAINING_PATH:
-        inputs = nn.load_tif(filename=dataset_path, dtype=np.float)
-        targets = nn.load_tif(filename=dataset_path, dtype=np.int)
-        generator = nn.generator(inputs, targets)
-        nn.fit(generator)
-    for dataset_path in NEURON_TEST_PATH:
-        inputs = nn.load_tif(filename=dataset_path, dtype=np.float)
-        targets = nn.load_tif(filename=dataset_path, dtype=np.int)
-        generator = nn.generator(inputs, targets)
-        nn.evaluate(generator)
+    train_generator = nn.generator(TRAINING_INPUTS, TRAINING_TARGETS)
+    nn.fit(train_generator)
+
+    test_generator = nn.generator(TEST_INPUTS, TEST_TARGETS)
+    nn.evaluate(test_generator)
+
     nn.save('model.h5')
+
+
+def main():
+    test()
+
+
+if __name__ == '__main__':
+    main()
