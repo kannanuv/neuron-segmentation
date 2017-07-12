@@ -7,6 +7,7 @@ from keras import backend
 import argparse
 import numpy as np
 
+
 class NeuronModel:
     """
     """
@@ -46,50 +47,89 @@ class NeuronModel:
     def save(self, filepath):
         self._model.save(filepath)
 
-    def generator(self, inputs_filenames, targets_filenames,
-                  rotation_range=0, brightness_range=0,
-                  contrast_range=0):
-        while True:
-            for inputs_filename, targets_filename in zip(inputs_filenames,
-                                                         targets_filenames):
-                inputs = self.load_tif(inputs_filename)
-                inputs = inputs.reshape(1, inputs.shape[0],
-                                        inputs.shape[1], inputs.shape[2], 1)
-                targets = self.load_tif(targets_filename)
-                targets = targets.reshape(1, targets.shape[0],
-                                          targets.shape[1], targets.shape[2], 1)
-                bounding_box_size = self.input_shape[0:3]
-                for box in self.boxes(targets, bounding_box_size):
-                    ([x1, y1, z1], [x2, y2, z2]) = box
-                    mean = targets[:, z1:z2, y1:y2, x1:x2, :].mean()
-                    if mean < 0.95 and mean > 0.05:
-                        subtargets = np.array([targets[0, (z1+z2)/2,
-                                                       (y1+y2)/2,
-                                                       (x1+x2)/2, 0]])
-                        subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
-                        yield (subinputs, subtargets)
 
-    def load_tif(self, filename, dtype=None):
-        if dtype is None:
-            return io.imread(filename)
-        else:
-            return io.imread(filename).astype(dtype)
+def generator(inputs_filenames, targets_filenames,
+              bounding_box_size,
+              rotation_range=0, brightness_range=0,
+              contrast_range=0, background_value=1,
+              neuron_value=0):
+    while True:
+        for inputs_filename, targets_filename in zip(inputs_filenames,
+                                                     targets_filenames):
+            inputs = load_tif(inputs_filename)
+            inputs = inputs.reshape(1, inputs.shape[0],
+                                    inputs.shape[1],
+                                    inputs.shape[2], 1)
+            targets = load_tif(targets_filename)
+            targets = targets.reshape(1, targets.shape[0],
+                                      targets.shape[1],
+                                      targets.shape[2], 1)
+            (H, W, L) = bounding_box_size
+            [x, y, z] = [0, 0, 0]
 
-    def boxes(self, data, bounding_box_size):
-        [x, y, z] = [0, 0, 0]
-        (L, H, W) = bounding_box_size
-        while True:
-            x += W
-            if x + W > data.shape[3]:
+            for neuron_coord in coords(targets, value=neuron_value):
+                [x, y, z] = neuron_coord
+                [x1, y1, z1] = [x - L/2, y - W/2, z - H/2]
+                [x2, y2, z2] = [x + L/2, y + W/2, z + H/2]
+                bounding_coords = [[x1, y1, z1], [x2, y2, z2]]
+                if in_bounds(targets, bounding_coords):
+                    subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
+                    subtargets = np.array([neuron_value])
+                    yield (subinputs, subtargets)
+                    neuron_neighborhood = targets[:, z1:z2, y1:y2, x1:x2, :]
+                    for background_coord in coords(neuron_neighborhood,
+                                                   value=background_value):
+                        [x, y, z] = background_coord
+                        [x1, y1, z1] = [x - L/2, y - W/2, z - H/2]
+                        [x2, y2, z2] = [x + L/2, y + W/2, z + H/2]
+                        bounding_coords = [[x1, y1, z1], [x2, y2, z2]]
+                        if in_bounds(targets, bounding_coords):
+                            subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
+                            subtargets = np.array([background_value])
+                            yield (subinputs, subtargets)
+
+
+def in_bounds(data, bounding_coords):
+    [x1, y1, z1] = bounding_coords[0]
+    [x2, y2, z2] = bounding_coords[1]
+    in_bounds = (x1 > 0 and y1 > 0 and z1 > 0) and \
+                (x2 < data.shape[1] and y2 < data.shape[2] and
+                 z2 < data.shape[3])
+    return in_bounds
+
+
+def load_tif(filename, dtype=None):
+    if dtype is None:
+        return io.imread(filename)
+    else:
+        return io.imread(filename).astype(dtype)
+
+
+def coords(data, value):
+    [x, y, z] = [0, 0, 0]
+    while True:
+        x += 1
+        if x >= data.shape[3]:
+            x = 0
+            y += 1
+        if y >= data.shape[2]:
+            y = 0
+            z += 1
+        if z >= data.shape[1]:
+            z = 0
+            raise StopIteration
+        while data[0, z, y, x, 0] != value:
+            x += 1
+            if x >= data.shape[3]:
                 x = 0
-                y += H
-            if y + H > data.shape[2]:
+                y += 1
+            if y >= data.shape[2]:
                 y = 0
-                z += L
-            if z + L > data.shape[1]:
+                z += 1
+            if z >= data.shape[1]:
                 z = 0
                 raise StopIteration
-            yield ([x, y, z], [x+W, y+H, z+L])
+        yield [x, y, z]
 
 
 def test():
@@ -101,10 +141,10 @@ def test():
 
     nn = NeuronModel()
 
-    train_generator = nn.generator(TRAINING_INPUTS, TRAINING_TARGETS)
+    train_generator = generator(TRAINING_INPUTS, TRAINING_TARGETS)
     nn.fit(train_generator)
 
-    test_generator = nn.generator(TEST_INPUTS, TEST_TARGETS)
+    test_generator = generator(TEST_INPUTS, TEST_TARGETS)
     nn.evaluate(test_generator, steps=10)
 
     nn.save('model.h5')
