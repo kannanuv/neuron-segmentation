@@ -32,7 +32,7 @@ class NeuronModel:
         self._model.compile(loss='binary_crossentropy', optimizer='Adam',
                             metrics=['accuracy'])
 
-    def fit(self, generator, steps_per_epoch=32):
+    def fit(self, generator, steps_per_epoch=100):
         self._model.fit_generator(generator, steps_per_epoch,
                                   epochs=100,
                                   class_weight={0: 1, 1: 1.5},
@@ -76,7 +76,8 @@ def generator(inputs_filenames, targets_filenames,
                     subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
                     subtargets = np.array([neuron_value])
                     yield (subinputs, subtargets)
-                    neuron_neighborhood = targets[:, z1:z2, y1:y2, x1:x2, :]
+                    neuron_neighborhood = targets[:, (z-4):(z+4),
+                                                  (y-4):(y+4), (x-4):(x+4), :]
                     for background_coord in coords(neuron_neighborhood,
                                                    value=background_value):
                         [x, y, z] = background_coord
@@ -139,12 +140,16 @@ def test():
     TEST_INPUTS = ['test/inputs.tif']
     TEST_TARGETS = ['test/targets.tif']
 
-    nn = NeuronModel()
+    input_shape = (8, 16, 16, 1)
 
-    train_generator = generator(TRAINING_INPUTS, TRAINING_TARGETS)
+    nn = NeuronModel(input_shape=input_shape)
+    bounding_box_size = input_shape[0:3]
+
+    train_generator = generator(TRAINING_INPUTS, TRAINING_TARGETS,
+                                bounding_box_size)
     nn.fit(train_generator)
 
-    test_generator = generator(TEST_INPUTS, TEST_TARGETS)
+    test_generator = generator(TEST_INPUTS, TEST_TARGETS, bounding_box_size)
     nn.evaluate(test_generator, steps=10)
 
     nn.save('model.h5')
