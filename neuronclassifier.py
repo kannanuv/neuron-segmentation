@@ -107,7 +107,7 @@ def load_tif(filename, dtype=None):
         return io.imread(filename).astype(dtype)
 
 
-def coords(data, value):
+def coords(data, value=None):
     [x, y, z] = [0, 0, 0]
     while True:
         x += 1
@@ -120,18 +120,21 @@ def coords(data, value):
         if z >= data.shape[1]:
             z = 0
             raise StopIteration
-        while data[0, z, y, x, 0] != value:
-            x += 1
-            if x >= data.shape[3]:
-                x = 0
-                y += 1
-            if y >= data.shape[2]:
-                y = 0
-                z += 1
-            if z >= data.shape[1]:
-                z = 0
-                raise StopIteration
-        yield [x, y, z]
+        if value is None:
+            yield [x, y, z]
+        else:
+            while data[0, z, y, x, 0] != value:
+                x += 1
+                if x >= data.shape[3]:
+                    x = 0
+                    y += 1
+                if y >= data.shape[2]:
+                    y = 0
+                    z += 1
+                if z >= data.shape[1]:
+                    z = 0
+                    raise StopIteration
+                yield [x, y, z]
 
 
 def test():
