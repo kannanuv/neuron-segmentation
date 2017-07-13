@@ -29,17 +29,18 @@ class NeuronModel:
         self._model.add(Activation('relu'))
         self._model.add(Dense(1, activation='sigmoid'))
         self._model.summary()
-        self._model.compile(loss='binary_crossentropy', optimizer='Adam',
+        self._model.compile(loss='binary_crossentropy',
+                            optimizer='Adam',
                             metrics=['accuracy'])
 
-    def fit(self, generator, steps_per_epoch=100):
-        self._model.fit_generator(generator, steps_per_epoch,
-                                  epochs=100,
-                                  class_weight={0: 1, 1: 1.5},
-                                  verbose=2)
+    def fit(self, generator, steps_per_epoch=64):
+        return self._model.fit_generator(generator, steps_per_epoch,
+                                         epochs=50,
+                                         class_weight={0: 1, 1: 1.5},
+                                         verbose=2)
 
     def evaluate(self, generator, steps):
-        self._model.evaluate_generator(generator, steps)
+        return self._model.evaluate_generator(generator, steps)
 
     def load(self, filepath):
         self._model.load_model(filepath)
@@ -76,8 +77,8 @@ def generator(inputs_filenames, targets_filenames,
                     subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
                     subtargets = np.array([neuron_value])
                     yield (subinputs, subtargets)
-                    neuron_neighborhood = targets[:, (z-4):(z+4),
-                                                  (y-4):(y+4), (x-4):(x+4), :]
+                    neuron_neighborhood = targets[:, (z-2):(z+2),
+                                                  (y-2):(y+2), (x-2):(x+2), :]
                     for background_coord in coords(neuron_neighborhood,
                                                    value=background_value):
                         [x, y, z] = background_coord
@@ -150,7 +151,12 @@ def test():
     nn.fit(train_generator)
 
     test_generator = generator(TEST_INPUTS, TEST_TARGETS, bounding_box_size)
-    nn.evaluate(test_generator, steps=10)
+    loss, accuracy = nn.evaluate(test_generator, steps=64)
+    print('''
+Evaluation
+==========''')
+    print('Loss: {}'.format(loss))
+    print('Accuracy: {}'.format(accuracy))
 
     nn.save('model.h5')
 
