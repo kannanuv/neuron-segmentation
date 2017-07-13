@@ -42,6 +42,23 @@ class NeuronModel:
     def evaluate(self, generator, steps):
         return self._model.evaluate_generator(generator, steps)
 
+    def predict(self, tif_filename, bounding_box_size):
+        data = load_tif(tif_filename)
+        inputs = data.reshape(1, data.shape[0],
+                              data.shape[1],
+                              data.shape[2], 1)
+        targets = np.zeros(inputs)
+        for coord in coords(inputs):
+            (H, W, L) = bounding_box_size
+            [x, y, z] = coord
+            bounding_box = [[x - L/2, y - W/2, z - H/2],
+                            [x + L/2, y + W/2, z + H/2]]
+            if in_bounds(data, bounding_box):
+                targets[0, z, y, x, 0] = self._model.predict(inputs[0, z,
+                                                                    y, x, 0])
+        targets = targets.reshape(data.shape[0], data.shape[1], data.shape[2])
+        return targets
+
     def load(self, filepath):
         self._model.load_model(filepath)
 
@@ -95,8 +112,8 @@ def in_bounds(data, bounding_coords):
     [x1, y1, z1] = bounding_coords[0]
     [x2, y2, z2] = bounding_coords[1]
     in_bounds = (x1 > 0 and y1 > 0 and z1 > 0) and \
-                (x2 < data.shape[1] and y2 < data.shape[2] and
-                 z2 < data.shape[3])
+                (x2 < data.shape[3] and y2 < data.shape[2] and
+                 z2 < data.shape[1])
     return in_bounds
 
 
@@ -105,6 +122,10 @@ def load_tif(filename, dtype=None):
         return io.imread(filename)
     else:
         return io.imread(filename).astype(dtype)
+
+
+def save_tif(filename, array):
+    return io.imsave(filename, array)
 
 
 def coords(data, value=None):
@@ -160,6 +181,9 @@ Evaluation
 ==========''')
     print('Loss: {}'.format(loss))
     print('Accuracy: {}'.format(accuracy))
+
+    prediction = nn.predict(TEST_INPUTS[0], bounding_box_size=(8, 16, 16))
+    save_tif('prediction/targets.tif', prediction)
 
     nn.save('model.h5')
 
