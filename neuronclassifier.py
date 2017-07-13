@@ -6,7 +6,7 @@ from keras.layers import (Dense, Dropout, Activation, Flatten,
 from keras import backend
 import argparse
 import numpy as np
-
+import tifffile
 
 class NeuronModel:
     """
@@ -35,7 +35,7 @@ class NeuronModel:
 
     def fit(self, generator, steps_per_epoch=64):
         return self._model.fit_generator(generator, steps_per_epoch,
-                                         epochs=50,
+                                         epochs=100,
                                          class_weight={0: 1, 1: 1.5},
                                          verbose=2)
 
@@ -47,23 +47,29 @@ class NeuronModel:
         inputs = data.reshape(1, data.shape[0],
                               data.shape[1],
                               data.shape[2], 1)
-        targets = np.zeros(inputs)
+        inputs = inputs[:, :, 50:150, 50:150, :]
+        targets = np.zeros(inputs.shape)
         for coord in coords(inputs):
             (H, W, L) = bounding_box_size
             [x, y, z] = coord
+            if coord[1] % 100 == 0 and coord[0] % 49 == 0:
+                print([x, y, z])
             bounding_box = [[x - L/2, y - W/2, z - H/2],
                             [x + L/2, y + W/2, z + H/2]]
-            if in_bounds(data, bounding_box):
-                targets[0, z, y, x, 0] = self._model.predict(inputs[0, z,
-                                                                    y, x, 0])
-        targets = targets.reshape(data.shape[0], data.shape[1], data.shape[2])
+            if in_bounds(inputs, bounding_box):
+                [[x1, y1, z1], [x2, y2, z2]] = bounding_box
+                subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
+                targets[0, z, y, x, 0] = self._model.predict(subinputs)[0]
+        targets = targets.reshape(targets.shape[1],
+                                  targets.shape[2],
+                                  targets.shape[3])
         return targets
 
     def load(self, filepath):
-        self._model.load_model(filepath)
+        return self._model.load_model(filepath)
 
     def save(self, filepath):
-        self._model.save(filepath)
+        return self._model.save(filepath)
 
 
 def generator(inputs_filenames, targets_filenames,
@@ -84,6 +90,7 @@ def generator(inputs_filenames, targets_filenames,
                                       targets.shape[2], 1)
             (H, W, L) = bounding_box_size
             [x, y, z] = [0, 0, 0]
+            print('New file')
 
             for neuron_coord in coords(targets, value=neuron_value):
                 [x, y, z] = neuron_coord
@@ -96,8 +103,7 @@ def generator(inputs_filenames, targets_filenames,
                     yield (subinputs, subtargets)
                     neuron_neighborhood = targets[:, (z-2):(z+2),
                                                   (y-2):(y+2), (x-2):(x+2), :]
-                    for background_coord in coords(neuron_neighborhood,
-                                                   value=background_value):
+                    for background_coord in coords(neuron_neighborhood):
                         [x, y, z] = background_coord
                         [x1, y1, z1] = [x - L/2, y - W/2, z - H/2]
                         [x2, y2, z2] = [x + L/2, y + W/2, z + H/2]
@@ -112,8 +118,8 @@ def in_bounds(data, bounding_coords):
     [x1, y1, z1] = bounding_coords[0]
     [x2, y2, z2] = bounding_coords[1]
     in_bounds = (x1 > 0 and y1 > 0 and z1 > 0) and \
-                (x2 < data.shape[3] and y2 < data.shape[2] and
-                 z2 < data.shape[1])
+                (x2 < data.shape[1] and y2 < data.shape[2] and
+                 z2 < data.shape[3])
     return in_bounds
 
 
@@ -125,7 +131,7 @@ def load_tif(filename, dtype=None):
 
 
 def save_tif(filename, array):
-    return io.imsave(filename, array)
+    return tifffile.imsave(filename, array)
 
 
 def coords(data, value=None):
@@ -183,6 +189,9 @@ Evaluation
     print('Accuracy: {}'.format(accuracy))
 
     prediction = nn.predict(TEST_INPUTS[0], bounding_box_size=(8, 16, 16))
+    np.save('prediction/targets.npy', prediction)
+    prediction = (prediction*255).astype(np.uint8)
+    print(prediction)
     save_tif('prediction/targets.tif', prediction)
 
     nn.save('model.h5')
