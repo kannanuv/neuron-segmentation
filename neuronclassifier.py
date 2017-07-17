@@ -4,9 +4,11 @@ from keras.models import Sequential, load_model
 from keras.layers import (Dense, Dropout, Activation, Flatten,
                           Conv3D, MaxPooling3D)
 from keras import backend
+from keras.callbacks import EarlyStopping
 import argparse
 import numpy as np
 import tifffile
+import h5py 
 
 class NeuronModel:
     """
@@ -34,10 +36,13 @@ class NeuronModel:
                             metrics=['accuracy'])
 
     def fit(self, generator, steps_per_epoch=64):
+        callbacks = [EarlyStopping(monitor='loss', min_delta=0.001,
+                                  patience=3, mode='min')]
         return self._model.fit_generator(generator, steps_per_epoch,
-                                         epochs=100,
+                                         epochs=500,
                                          class_weight={0: 1, 1: 1.5},
-                                         verbose=2)
+                                         verbose=2,
+                                         callbacks = callbacks)
 
     def evaluate(self, generator, steps):
         return self._model.evaluate_generator(generator, steps)
@@ -47,12 +52,11 @@ class NeuronModel:
         inputs = data.reshape(1, data.shape[0],
                               data.shape[1],
                               data.shape[2], 1)
-        inputs = inputs[:, :, 50:150, 50:150, :]
         targets = np.zeros(inputs.shape)
         for coord in coords(inputs):
             (H, W, L) = bounding_box_size
             [x, y, z] = coord
-            if coord[1] % 100 == 0 and coord[0] % 49 == 0:
+            if coord[1] % 20000 == 0 and coord[0] % 20000 == 0:
                 print([x, y, z])
             bounding_box = [[x - L/2, y - W/2, z - H/2],
                             [x + L/2, y + W/2, z + H/2]]
@@ -171,6 +175,8 @@ def test():
     TEST_INPUTS = ['test/inputs.tif']
     TEST_TARGETS = ['test/targets.tif']
 
+    PREDICTION = 'prediction/inputs.tif'
+
     input_shape = (8, 16, 16, 1)
 
     nn = NeuronModel(input_shape=input_shape)
@@ -188,7 +194,7 @@ Evaluation
     print('Loss: {}'.format(loss))
     print('Accuracy: {}'.format(accuracy))
 
-    prediction = nn.predict(TEST_INPUTS[0], bounding_box_size=(8, 16, 16))
+    prediction = nn.predict(PREDICTION, bounding_box_size=(8, 16, 16))
     np.save('prediction/targets.npy', prediction)
     prediction = (prediction*255).astype(np.uint8)
     print(prediction)
