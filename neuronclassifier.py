@@ -35,14 +35,16 @@ class NeuronModel:
                             optimizer='Adam',
                             metrics=['accuracy'])
 
-    def fit(self, generator, steps_per_epoch=64):
-        callbacks = [EarlyStopping(monitor='loss', min_delta=0.001,
-                                  patience=3, mode='min')]
-        return self._model.fit_generator(generator, steps_per_epoch,
+    def fit(self, train_generator, test_generator, steps_per_epoch=64):
+        callbacks = [AutomatedConvergence(model=self,
+                                          test_generator=test_generator,
+                                          monitor='loss', min_delta=0.001,
+                                          patience=3, mode='min')]
+        return self._model.fit_generator(train_generator, steps_per_epoch,
                                          epochs=500,
                                          class_weight={0: 1, 1: 1.5},
                                          verbose=2,
-                                         callbacks = callbacks)
+                                         callbacks=callbacks)
 
     def evaluate(self, generator, steps):
         return self._model.evaluate_generator(generator, steps)
@@ -94,7 +96,6 @@ def generator(inputs_filenames, targets_filenames,
                                       targets.shape[2], 1)
             (H, W, L) = bounding_box_size
             [x, y, z] = [0, 0, 0]
-            print('New file')
 
             for neuron_coord in coords(targets, value=neuron_value):
                 [x, y, z] = neuron_coord
@@ -116,6 +117,28 @@ def generator(inputs_filenames, targets_filenames,
                             subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
                             subtargets = np.array([background_value])
                             yield (subinputs, subtargets)
+
+
+class AutomatedConvergence(EarlyStopping):
+    def __init__(self, model, test_generator, monitor='val_loss',
+                 min_delta=0, patience=0, mode='auto'):
+        super(AutomatedConvergence, self).__init__()
+        self.test_generator = test_generator
+        self.model = model
+
+    def on_epoch_end(self, epoch, logs=None):
+        x, y = map(list,
+                   zip(*[self.test_generator.next() for i in range(1, 64)]))
+        self.loss, self.accuracy = self.model.test_on_batch(x, y)
+        current = self.loss
+        if self.monitor_op(current - self.min_delta, self.best):
+            self.best = current
+            self.wait = 0
+        else:
+            if self.wait >= self.patience:
+                self.stopped_epoch = epoch
+                self.model.stop_training = True
+            self.wait += 1
 
 
 def in_bounds(data, bounding_coords):
@@ -184,9 +207,9 @@ def test():
 
     train_generator = generator(TRAINING_INPUTS, TRAINING_TARGETS,
                                 bounding_box_size)
-    nn.fit(train_generator)
-
     test_generator = generator(TEST_INPUTS, TEST_TARGETS, bounding_box_size)
+    nn.fit(train_generator, test_generator)
+
     loss, accuracy = nn.evaluate(test_generator, steps=64)
     print('''
 Evaluation
