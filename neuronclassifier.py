@@ -8,7 +8,9 @@ from keras.callbacks import EarlyStopping
 import argparse
 import numpy as np
 import tifffile
-import h5py 
+import h5py
+from random import randint
+
 
 class NeuronModel:
     """
@@ -28,6 +30,8 @@ class NeuronModel:
         self._model.add(Activation('relu'))
         self._model.add(Flatten())
         self._model.add(Dense(16))
+        self._model.add(Dropout(rate=0.5)) # Dropout necessary to
+                                           # avoid overfitting
         self._model.add(Activation('relu'))
         self._model.add(Dense(1, activation='sigmoid'))
         self._model.summary()
@@ -35,21 +39,44 @@ class NeuronModel:
                             optimizer='Adam',
                             metrics=['accuracy'])
 
-    def fit(self, train_generator, test_generator, steps_per_epoch=64):
-        callbacks = [AutomatedConvergence(model=self,
-                                          test_generator=test_generator,
-                                          monitor='loss', min_delta=0.001,
-                                          patience=3, mode='min')]
-        return self._model.fit_generator(train_generator, steps_per_epoch,
-                                         epochs=500,
+    def fit(self, generator, steps_per_epoch=64):
+        """
+        Trains the model
+        
+        Args: 
+            generator (generator): A generator to generate test data from
+            steps_per_epoch (int): Number of step per epoch
+        """
+        callbacks = [EarlyStopping(monitor='loss', min_delta=0.01,
+                                   patience=3, mode='min')]
+        return self._model.fit_generator(generator, steps_per_epoch,
+                                         epochs=9,
                                          class_weight={0: 1, 1: 1.5},
-                                         verbose=2,
-                                         callbacks=callbacks)
+                                         verbose=2)
 
     def evaluate(self, generator, steps):
+        """
+        Evaluates the accuracy of model on test dataset
+        
+        Args:
+            generator (generator): A generator to generate test data from
+            steps (int): Number to steps to perform evaluation on
+        Returns:
+            (float, float): The loss and accuracy, respectively
+        """
         return self._model.evaluate_generator(generator, steps)
 
     def predict(self, tif_filename, bounding_box_size):
+        """
+        Runs an inference on raw TIFF file
+        
+        Args:
+            tif_filename (string): Name of raw TIFF file
+            bounding_box_size (tuple): Tuple of (height, width, length) of
+                bounding box
+        Returns:
+            array: Array of predicted segmentation
+        """
         data = load_tif(tif_filename)
         inputs = data.reshape(1, data.shape[0],
                               data.shape[1],
@@ -72,9 +99,21 @@ class NeuronModel:
         return targets
 
     def load(self, filepath):
-        return self._model.load_model(filepath)
+        """
+        Loads model from filepath
+
+        Args:
+            filepath (string): Path to load model from
+        """
+        self._model = load_model(filepath)
 
     def save(self, filepath):
+        """
+        Saves model to filepath
+        
+        Args:
+            filepath (string): Path to save model to
+        """
         return self._model.save(filepath)
 
 
@@ -82,10 +121,22 @@ def generator(inputs_filenames, targets_filenames,
               bounding_box_size,
               rotation_range=0, brightness_range=0,
               contrast_range=0, background_value=1,
-              neuron_value=0):
+              neuron_value=False):
+    """
+    Generates data from raw and ground-truth datasets
+    
+    Args:
+        inputs_filenames (list): List of strings with input file names
+        targets_filenames (list): List of strings with target file names
+        bounding_box_size (tuple): Tuple of (height, width, length) of 
+            bounding box
+    Returns:
+        generator: A generator that generates a (input, target) output
+    """
     while True:
         for inputs_filename, targets_filename in zip(inputs_filenames,
                                                      targets_filenames):
+            # Loads raw input and ground-truth TIFFs
             inputs = load_tif(inputs_filename)
             inputs = inputs.reshape(1, inputs.shape[0],
                                     inputs.shape[1],
@@ -97,26 +148,29 @@ def generator(inputs_filenames, targets_filenames,
             (H, W, L) = bounding_box_size
             [x, y, z] = [0, 0, 0]
 
-            for neuron_coord in coords(targets, value=neuron_value):
+            # Searches for a random neuron coordinate to return the
+            # coordinate along with N random coordinates in
+            # surrounding neighborhood
+            for neuron_coord in random_coords(targets, value=neuron_value):
                 [x, y, z] = neuron_coord
                 [x1, y1, z1] = [x - L/2, y - W/2, z - H/2]
                 [x2, y2, z2] = [x + L/2, y + W/2, z + H/2]
-                bounding_coords = [[x1, y1, z1], [x2, y2, z2]]
+                bounding_coords = [[x1-2, y1-2, z1-2], [x2+2, y2+2, z2+2]]
                 if in_bounds(targets, bounding_coords):
-                    subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
-                    subtargets = np.array([neuron_value])
+                    subinputs = inputs[:, z1:z2, y1:y2,
+                                       x1:x2, :]
+                    subtargets = np.array([int(targets[0, z,
+                                                       y, x, 0])])
                     yield (subinputs, subtargets)
-                    neuron_neighborhood = targets[:, (z-2):(z+2),
-                                                  (y-2):(y+2), (x-2):(x+2), :]
-                    for background_coord in coords(neuron_neighborhood):
-                        [x, y, z] = background_coord
-                        [x1, y1, z1] = [x - L/2, y - W/2, z - H/2]
-                        [x2, y2, z2] = [x + L/2, y + W/2, z + H/2]
-                        bounding_coords = [[x1, y1, z1], [x2, y2, z2]]
-                        if in_bounds(targets, bounding_coords):
-                            subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
-                            subtargets = np.array([background_value])
-                            yield (subinputs, subtargets)
+                    for elements in range(1, 16):
+                        i = randint(-2, 2)
+                        j = randint(-2, 2)
+                        k = randint(-2, 2)
+                        subinputs = inputs[:, z1+k:z2+k, y1+j:y2+j,
+                                           x1+i:x2+i, :]
+                        subtargets = np.array([int(targets[0, z+k,
+                                                           y+j, x+i, 0])])
+                        yield (subinputs, subtargets)
 
 
 class AutomatedConvergence(EarlyStopping):
@@ -142,15 +196,38 @@ class AutomatedConvergence(EarlyStopping):
 
 
 def in_bounds(data, bounding_coords):
+    """
+    Determines if data is in bounding_coords
+
+    Args:
+        data (array): Numpy array of data
+        bounding_coords (list): Coordinates of bounding box
+
+    Returns:
+        bool: True if bounding coordinates are in data; false otherwise
+
+    Examples:
+        >>> in_bounds(np.zeros((2,2)), [[0, 0, 0], [1, 1, 1]])
+        True
+        >>> in_bounds(np.zeros((2,2)), [[0, 0, 0], [4, 4, 4]])
+        False
+    """
     [x1, y1, z1] = bounding_coords[0]
     [x2, y2, z2] = bounding_coords[1]
-    in_bounds = (x1 > 0 and y1 > 0 and z1 > 0) and \
-                (x2 < data.shape[1] and y2 < data.shape[2] and
-                 z2 < data.shape[3])
+    in_bounds = (x1 >= 0 and y1 >= 0 and z1 >= 0) and \
+                (x2 < data.shape[3] and y2 < data.shape[2] and
+                 z2 < data.shape[1])
     return in_bounds
 
 
 def load_tif(filename, dtype=None):
+    """
+    Loads TIFF as a Numpy array casted as dtype
+
+    Args:
+        filename (string): Name of TIFF file
+        dtype (dtype): Type to cast file as
+    """
     if dtype is None:
         return io.imread(filename)
     else:
@@ -158,10 +235,24 @@ def load_tif(filename, dtype=None):
 
 
 def save_tif(filename, array):
+    """
+    Saves array as TIFF
+
+    Args: 
+        filename (string): Name of file
+        array (array): Numpy array
+    """
     return tifffile.imsave(filename, array)
 
 
 def coords(data, value=None):
+    """
+    Generates sequential coordinates from data with value
+
+    Args:
+        data (array): An array of data
+        value (object): Value to retrieve
+    """
     [x, y, z] = [0, 0, 0]
     while True:
         x += 1
@@ -191,6 +282,30 @@ def coords(data, value=None):
                 yield [x, y, z]
 
 
+def random_coords(data, value=None):
+    """
+    Generates random coordinates from data with value
+
+    Args:
+        data (array): An array of data
+        value (object): Value to retrieve
+    """
+    [x, y, z] = [0, 0, 0]
+    if value is None:
+        while True:
+            x = randint(0, data.shape[3]-1)
+            y = randint(0, data.shape[2]-1)
+            z = randint(0, data.shape[1]-1)
+            yield [x, y, z]
+    else:
+        while True:
+            x = randint(0, data.shape[3]-1)
+            y = randint(0, data.shape[2]-1)
+            z = randint(0, data.shape[1]-1)
+            if data[0, z, y, x, 0] == value:
+                yield [x, y, z]
+
+
 def test():
     TRAINING_INPUTS = ['training/inputs.tif']
     TRAINING_TARGETS = ['training/targets.tif']
@@ -207,9 +322,9 @@ def test():
 
     train_generator = generator(TRAINING_INPUTS, TRAINING_TARGETS,
                                 bounding_box_size)
-    test_generator = generator(TEST_INPUTS, TEST_TARGETS, bounding_box_size)
-    nn.fit(train_generator, test_generator)
+    nn.fit(train_generator)
 
+    test_generator = generator(TEST_INPUTS, TEST_TARGETS, bounding_box_size)
     loss, accuracy = nn.evaluate(test_generator, steps=64)
     print('''
 Evaluation
@@ -219,7 +334,7 @@ Evaluation
 
     prediction = nn.predict(PREDICTION, bounding_box_size=(8, 16, 16))
     np.save('prediction/targets.npy', prediction)
-    prediction = (prediction*255).astype(np.uint8)
+    prediction = (prediction*65535).astype(np.uint16)
     print(prediction)
     save_tif('prediction/targets.tif', prediction)
 
