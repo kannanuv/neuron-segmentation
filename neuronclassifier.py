@@ -95,16 +95,28 @@ class NeuronModel:
         targets = np.zeros(inputs.shape)
 
         # Iterates through volume coordinates to predict voxel values
-        for coord in coords(inputs):
-            (H, W, L) = bounding_box_size
-            [x, y, z] = coord
-            bounding_box = [[x - L/2, y - W/2, z - H/2],
-                            [x + L/2, y + W/2, z + H/2]]
-            if in_bounds(inputs, bounding_box):
-                [[x1, y1, z1], [x2, y2, z2]] = bounding_box
-                subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
-                targets[0, z, y, x, 0] = self._model.predict(subinputs,
-                                                             batch_size=1)[0]
+        isFinished = False;
+        while not isFinised:
+            voxel_generator = coords(inputs, bounding_box_size)
+            subinputs = np.ndarray([])
+            coords = []
+            for i in range(batch_size):
+                coord = voxel_generator.next(False):
+                coords.append(coord)
+                if coord == False:
+                    isFinished = True
+                    break
+                else:
+                    np.append(subinputs, inputs[:,
+                                                coord[3]-H/2:coord[3]+H/2,
+                                                coord[2]-W/2:coord[2]+W/2,
+                                                coord[1]-L/2:coord[1]+W/2,
+                                                :])
+            subtargets = self._model.predict_on_batch(subinputs)
+            for coord, subtarget in zip(coords, subtargets):
+                [x, y, z] = coord
+                target[:, z, y, x, :] = subtarget
+
         # Reshapes prediction volume to dimension 3 (Z, Y, X)
         targets = targets.reshape(targets.shape[1],
                                   targets.shape[2],
@@ -293,7 +305,7 @@ def save_tif(filename, array):
     return tifffile.imsave(filename, array)
 
 
-def coords(data, value=None):
+def coords(data, bounding_box_size=None):
     """
     Generates sequential coordinates from data with value
 
@@ -301,33 +313,33 @@ def coords(data, value=None):
         data (array): An array of data
         value (object): Value to retrieve
     """
-    [x, y, z] = [0, 0, 0]
-    while True:
-        x += 1
-        if x >= data.shape[3]:
-            x = 0
-            y += 1
-        if y >= data.shape[2]:
-            y = 0
-            z += 1
-        if z >= data.shape[1]:
-            z = 0
-            raise StopIteration
-        if value is None:
-            yield [x, y, z]
-        else:
-            while data[0, z, y, x, 0] != value:
-                x += 1
-                if x >= data.shape[3]:
-                    x = 0
-                    y += 1
-                if y >= data.shape[2]:
-                    y = 0
-                    z += 1
-                if z >= data.shape[1]:
-                    z = 0
-                    raise StopIteration
-                yield [x, y, z]
+    if bounding_box_size=None:
+        [x, y, z] = [0, 0, 0]
+        while True:
+            x += 1
+            if x >= data.shape[3]:
+                x = 0
+                y += 1
+            if y >= data.shape[2]:
+                y = 0
+                z += 1
+            if z >= data.shape[1]:
+                z = 0
+                raise StopIteration
+    else:
+        (L, W, H) = bounding_box_size
+        [x, y, z] = (L, W, H)
+        while True:
+            x += 1
+            if x >= data.shape[3]-L:
+                x = L
+                y += 1
+            if y >= data.shape[2]-W:
+                y = W
+                z += 1
+            if z >= data.shape[1]-H:
+                z = H
+                raise StopIteration
 
 
 def random_coords(data, value=None):
