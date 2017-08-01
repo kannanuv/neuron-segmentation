@@ -67,7 +67,7 @@ class NeuronModel:
         """
         return self._model.evaluate_generator(generator, steps)
 
-    def predict(self, tif_filename, bounding_box_size):
+    def predict(self, tif_filename, bounding_box_size=(8, 16, 16), batch_size=100):
         """
         Runs an inference on raw TIFF file
         
@@ -82,12 +82,12 @@ class NeuronModel:
         data = load_tif(tif_filename)
         (H, W, L) = bounding_box_size
         data = np.pad(data, ((H/2,), (W/2,), (L/2,)), mode='symmetric')
-        
+
         # Reshape input tensor to have dimension 5 (Batch, Z, Y, X, Channel)
         inputs = data.reshape(1, data.shape[0],
                               data.shape[1],
                               data.shape[2], 1)
-        
+
         # Normalize input tensor to have unit norm
         max_inputs = float(np.max(inputs))
         min_inputs = float(np.min(inputs))
@@ -95,27 +95,35 @@ class NeuronModel:
         targets = np.zeros(inputs.shape)
 
         # Iterates through volume coordinates to predict voxel values
-        isFinished = False;
-        while not isFinised:
-            voxel_generator = coords(inputs, bounding_box_size)
-            subinputs = np.ndarray([])
-            coords = []
+        isFinished = False
+        batch = 1
+        voxel_generator = coord_generator(inputs,
+                                          bounding_box_size=(8, 16, 16))
+        while not isFinished:
+            print("Batch: {}".format(batch))
+            batch += 1
+            subinputs = np.zeros((1, 8, 16, 16, 1))
+            coords = [(0, 0, 0)]
             for i in range(batch_size):
-                coord = voxel_generator.next(False):
+                coord = next(voxel_generator, False)
                 coords.append(coord)
-                if coord == False:
+                if coord is False:
                     isFinished = True
                     break
                 else:
-                    np.append(subinputs, inputs[:,
-                                                coord[3]-H/2:coord[3]+H/2,
-                                                coord[2]-W/2:coord[2]+W/2,
-                                                coord[1]-L/2:coord[1]+W/2,
-                                                :])
+                    [x, y, z] = coord
+                    subinputs = np.concatenate((subinputs,
+                                                inputs[:,
+                                                       z-H/2:z+H/2,
+                                                       y-W/2:y+W/2,
+                                                       x-L/2:x+W/2,
+                                                       :]),
+                                               axis=0)
             subtargets = self._model.predict_on_batch(subinputs)
             for coord, subtarget in zip(coords, subtargets):
                 [x, y, z] = coord
-                target[:, z, y, x, :] = subtarget
+                targets[:, z, y, x, :] = subtarget
+            print(coords[-1], subtargets[-1])
 
         # Reshapes prediction volume to dimension 3 (Z, Y, X)
         targets = targets.reshape(targets.shape[1],
@@ -157,7 +165,7 @@ def generator(inputs_filenames,
     Args:
         inputs_filenames (list): List of strings with input file names
         targets_filenames (list): List of strings with target file names
-        bounding_box_size (tuple): Tuple of (height, width, length) of 
+        bounding_box_size (tuple): Tuple of (height, width, length) of
             bounding box
     Returns:
         generator: A generator that generates a (input, target) output
@@ -173,7 +181,7 @@ def generator(inputs_filenames,
             max_inputs = float(np.max(inputs))
             min_inputs = float(np.min(inputs))
             inputs = (inputs - min_inputs)/(max_inputs - min_inputs)
-            
+
             targets = load_tif(targets_filename)
             targets = targets.reshape(1, targets.shape[0],
                                       targets.shape[1],
@@ -298,14 +306,14 @@ def save_tif(filename, array):
     """
     Saves array as TIFF
 
-    Args: 
+    Args:
         filename (string): Name of file
         array (array): Numpy array
     """
     return tifffile.imsave(filename, array)
 
 
-def coords(data, bounding_box_size=None):
+def coord_generator(data, bounding_box_size):
     """
     Generates sequential coordinates from data with value
 
@@ -313,7 +321,7 @@ def coords(data, bounding_box_size=None):
         data (array): An array of data
         value (object): Value to retrieve
     """
-    if bounding_box_size=None:
+    if bounding_box_size is None:
         [x, y, z] = [0, 0, 0]
         while True:
             x += 1
@@ -326,20 +334,22 @@ def coords(data, bounding_box_size=None):
             if z >= data.shape[1]:
                 z = 0
                 raise StopIteration
+            yield [x, y, z]
     else:
-        (L, W, H) = bounding_box_size
-        [x, y, z] = (L, W, H)
+        [H, W, L] = bounding_box_size
+        [x, y, z] = [L/2, W/2, H/2]
         while True:
             x += 1
-            if x >= data.shape[3]-L:
-                x = L
+            if x >= data.shape[3]-L/2:
+                x = L/2
                 y += 1
-            if y >= data.shape[2]-W:
-                y = W
+            if y >= data.shape[2]-W/2:
+                y = W/2
                 z += 1
-            if z >= data.shape[1]-H:
-                z = H
+            if z >= data.shape[1]-H/2:
+                z = H/2
                 raise StopIteration
+            yield [x, y, z]
 
 
 def random_coords(data, value=None):

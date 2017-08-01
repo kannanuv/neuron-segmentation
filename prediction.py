@@ -10,10 +10,10 @@ def main():
     nn.load(MODEL)
     
     prediction = nn.predict(PREDICTION, bounding_box_size=(8, 16, 16))
-    np.save('prediction/targets~.npy', prediction)
+    np.save('prediction/targets.npy', prediction)
     prediction = (prediction*65535).astype(np.uint16)
     print(prediction)
-    save_tif('prediction/targets~.tif', prediction)
+    save_tif('prediction/targets.tif', prediction)
 
 
 if __name__ == '__main__':
