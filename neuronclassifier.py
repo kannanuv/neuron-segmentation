@@ -67,7 +67,7 @@ class NeuronModel:
         """
         return self._model.evaluate_generator(generator, steps)
 
-    def predict(self, tif_filename, bounding_box_size=(8, 16, 16), batch_size=100):
+    def predict(self, tif_filename, bounding_box_size=(8, 16, 16), batch_size=50):
         """
         Runs an inference on raw TIFF file
         
@@ -79,14 +79,15 @@ class NeuronModel:
             array: Array of predicted segmentation
         """
         # Load raw image volume
-        data = load_tif(tif_filename)
+        # data = load_tif(tif_filename)
+        data = np.random.rand(20, 20, 20)
         (H, W, L) = bounding_box_size
         data = np.pad(data, ((H/2,), (W/2,), (L/2,)), mode='symmetric')
 
         # Reshape input tensor to have dimension 5 (Batch, Z, Y, X, Channel)
         inputs = data.reshape(1, data.shape[0],
-                              data.shape[1],
-                              data.shape[2], 1)
+                               data.shape[1],
+                               data.shape[2], 1)
 
         # Normalize input tensor to have unit norm
         max_inputs = float(np.max(inputs))
@@ -123,7 +124,6 @@ class NeuronModel:
             for coord, subtarget in zip(coords, subtargets):
                 [x, y, z] = coord
                 targets[:, z, y, x, :] = subtarget
-            print(coords[-1], subtargets[-1])
 
         # Reshapes prediction volume to dimension 3 (Z, Y, X)
         targets = targets.reshape(targets.shape[1],
@@ -154,10 +154,8 @@ class NeuronModel:
 
 def generator(inputs_filenames,
               targets_filenames,
-              neuron_lookup_table,
+              edge_lookup_table,
               bounding_box_size,
-              rotation_range=0, brightness_range=0,
-              contrast_range=0, background_value=1,
               neuron_value=False, search_size=16):
     """
     Generates data from raw and ground-truth datasets
@@ -165,6 +163,8 @@ def generator(inputs_filenames,
     Args:
         inputs_filenames (list): List of strings with input file names
         targets_filenames (list): List of strings with target file names
+        edge_lookup_table (string): String of Python pickle with generated
+            edge coordinates
         bounding_box_size (tuple): Tuple of (height, width, length) of
             bounding box
     Returns:
@@ -192,7 +192,7 @@ def generator(inputs_filenames,
             # Searches for a random neuron coordinate to return the
             # coordinate along with N random coordinates in
             # surrounding neighborhood
-            with open(neuron_lookup_table) as f:
+            with open(edge_lookup_table, 'r') as f:
                 neuron_lut = pickle.load(f)
                 while True:
                     neuron_coord = choice(neuron_lut)

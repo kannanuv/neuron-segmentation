@@ -2,7 +2,7 @@ from neuronclassifier import *
 
 
 def main():
-    PREDICTION = 'prediction/prediction.tif'
+    PREDICTION = 'prediction/patch.tif'
     MODEL = 'unit-normalized-model.h5'
     
     input_shape = (8, 16, 16, 1)
