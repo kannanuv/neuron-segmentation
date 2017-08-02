@@ -79,8 +79,7 @@ class NeuronModel:
             array: Array of predicted segmentation
         """
         # Load raw image volume
-        # data = load_tif(tif_filename)
-        data = np.random.rand(20, 20, 20)
+        data = load_tif(tif_filename)
         (H, W, L) = bounding_box_size
         data = np.pad(data, ((H/2,), (W/2,), (L/2,)), mode='symmetric')
 
