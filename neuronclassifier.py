@@ -67,7 +67,7 @@ class NeuronModel:
         """
         return self._model.evaluate_generator(generator, steps)
 
-    def predict(self, tif_filename, bounding_box_size):
+    def predict(self, tif_filename, bounding_box_size=(8, 16, 16), batch_size=50):
         """
         Runs an inference on raw TIFF file
         
@@ -78,30 +78,57 @@ class NeuronModel:
         Returns:
             array: Array of predicted segmentation
         """
+        # Load raw image volume
         data = load_tif(tif_filename)
         (H, W, L) = bounding_box_size
         data = np.pad(data, ((H/2,), (W/2,), (L/2,)), mode='symmetric')
+
+        # Reshape input tensor to have dimension 5 (Batch, Z, Y, X, Channel)
         inputs = data.reshape(1, data.shape[0],
-                              data.shape[1],
-                              data.shape[2], 1)
+                               data.shape[1],
+                               data.shape[2], 1)
+
+        # Normalize input tensor to have unit norm
         max_inputs = float(np.max(inputs))
         min_inputs = float(np.min(inputs))
         inputs = (inputs - min_inputs)/(max_inputs - min_inputs)
         targets = np.zeros(inputs.shape)
-        for coord in coords(inputs):
-            (H, W, L) = bounding_box_size
-            [x, y, z] = coord
-            if coord[1] % 20000 == 0 and coord[0] % 20000 == 0:
-                print([x, y, z])
-            bounding_box = [[x - L/2, y - W/2, z - H/2],
-                            [x + L/2, y + W/2, z + H/2]]
-            if in_bounds(inputs, bounding_box):
-                [[x1, y1, z1], [x2, y2, z2]] = bounding_box
-                subinputs = inputs[:, z1:z2, y1:y2, x1:x2, :]
-                targets[0, z, y, x, 0] = self._model.predict(subinputs)[0]
+
+        # Iterates through volume coordinates to predict voxel values
+        isFinished = False
+        batch = 1
+        voxel_generator = coord_generator(inputs,
+                                          bounding_box_size=(8, 16, 16))
+        while not isFinished:
+            print("Batch: {}".format(batch))
+            batch += 1
+            subinputs = np.zeros((1, 8, 16, 16, 1))
+            coords = [(0, 0, 0)]
+            for i in range(batch_size):
+                coord = next(voxel_generator, False)
+                coords.append(coord)
+                if coord is False:
+                    isFinished = True
+                    break
+                else:
+                    [x, y, z] = coord
+                    subinputs = np.concatenate((subinputs,
+                                                inputs[:,
+                                                       z-H/2:z+H/2,
+                                                       y-W/2:y+W/2,
+                                                       x-L/2:x+W/2,
+                                                       :]),
+                                               axis=0)
+            subtargets = self._model.predict_on_batch(subinputs)
+            for coord, subtarget in zip(coords, subtargets):
+                [x, y, z] = coord
+                targets[:, z, y, x, :] = subtarget
+
+        # Reshapes prediction volume to dimension 3 (Z, Y, X)
         targets = targets.reshape(targets.shape[1],
                                   targets.shape[2],
                                   targets.shape[3])
+        # Removes padding
         targets = targets[H/2:-H/2, W/2:-W/2, L/2:-L/2]
         return targets
 
@@ -124,18 +151,20 @@ class NeuronModel:
         return self._model.save(filepath)
 
 
-def generator(inputs_filenames, targets_filenames,
+def generator(inputs_filenames,
+              targets_filenames,
+              edge_lookup_table,
               bounding_box_size,
-              rotation_range=0, brightness_range=0,
-              contrast_range=0, background_value=1,
-              neuron_value=False):
+              neuron_value=False, search_size=16):
     """
     Generates data from raw and ground-truth datasets
     
     Args:
         inputs_filenames (list): List of strings with input file names
         targets_filenames (list): List of strings with target file names
-        bounding_box_size (tuple): Tuple of (height, width, length) of 
+        edge_lookup_table (string): String of Python pickle with generated
+            edge coordinates
+        bounding_box_size (tuple): Tuple of (height, width, length) of
             bounding box
     Returns:
         generator: A generator that generates a (input, target) output
@@ -151,7 +180,7 @@ def generator(inputs_filenames, targets_filenames,
             max_inputs = float(np.max(inputs))
             min_inputs = float(np.min(inputs))
             inputs = (inputs - min_inputs)/(max_inputs - min_inputs)
-            
+
             targets = load_tif(targets_filename)
             targets = targets.reshape(1, targets.shape[0],
                                       targets.shape[1],
@@ -162,31 +191,44 @@ def generator(inputs_filenames, targets_filenames,
             # Searches for a random neuron coordinate to return the
             # coordinate along with N random coordinates in
             # surrounding neighborhood
-            with open('arun-neuron-lut.pickle') as f:
+            with open(edge_lookup_table, 'r') as f:
                 neuron_lut = pickle.load(f)
                 while True:
                     neuron_coord = choice(neuron_lut)
                     [z, y, x] = neuron_coord
                     [x1, y1, z1] = [x - L/2, y - W/2, z - H/2]
                     [x2, y2, z2] = [x + L/2, y + W/2, z + H/2]
-                    bounding_coords = [[x1-16, y1-16, z1-16], [x2+16, y2+16, z2+16]]
+                    bounding_coords = [[x1-search_size,
+                                        y1-search_size,
+                                        z1-search_size],
+                                       [x2+search_size,
+                                        y2+search_size,
+                                        z2+search_size]]
                     if in_bounds(targets, bounding_coords):
                         subinputs = inputs[:, z1:z2, y1:y2,
                                            x1:x2, :]
                         subtargets = np.array([int(targets[0, z,
                                                            y, x, 0])])
                         yield (subinputs, subtargets)
-                        for elements in range(1, 16):
+                        for elements in range(1, search_size):
                             hasBackground = False
                             hasNeuron = False
                             while not (hasBackground and hasNeuron):
-                                i = randint(-16, 15)
-                                j = randint(-16, 15)
-                                k = randint(-16, 15)
-                                subinputs = np.rot90(inputs[:, z1+k:z2+k, y1+j:y2+j,
-                                                            x1+i:x2+i, :], k=randint(0, 3), axes=(2,3))
-                                subtargets = np.array([int(targets[0, z+k,
-                                                                   y+j, x+i, 0])])
+                                i = randint(-search_size, search_size-1)
+                                j = randint(-search_size, search_size-1)
+                                k = randint(-search_size, search_size-1)
+                                subinputs = np.rot90(inputs[:,
+                                                            z1+k:z2+k,
+                                                            y1+j:y2+j,
+                                                            x1+i:x2+i,
+                                                            :],
+                                                     k=randint(0, 3),
+                                                     axes=(2,3))
+                                subtargets = np.array([int(targets[0,
+                                                                   z+k,
+                                                                   y+j,
+                                                                   x+i,
+                                                                   0])])
                                 if not hasNeuron and subtargets[0] == neuron_value:
                                     hasNeuron = (subtargets[0] == neuron_value)
                                     yield (subinputs, subtargets)
@@ -196,6 +238,9 @@ def generator(inputs_filenames, targets_filenames,
 
 
 class AutomatedConvergence(EarlyStopping):
+    """
+    Stops training when testing loss converges
+    """
     def __init__(self, model, test_generator, monitor='val_loss',
                  min_delta=0, patience=0, mode='auto'):
         super(AutomatedConvergence, self).__init__()
@@ -260,14 +305,14 @@ def save_tif(filename, array):
     """
     Saves array as TIFF
 
-    Args: 
+    Args:
         filename (string): Name of file
         array (array): Numpy array
     """
     return tifffile.imsave(filename, array)
 
 
-def coords(data, value=None):
+def coord_generator(data, bounding_box_size):
     """
     Generates sequential coordinates from data with value
 
@@ -275,33 +320,35 @@ def coords(data, value=None):
         data (array): An array of data
         value (object): Value to retrieve
     """
-    [x, y, z] = [0, 0, 0]
-    while True:
-        x += 1
-        if x >= data.shape[3]:
-            x = 0
-            y += 1
-        if y >= data.shape[2]:
-            y = 0
-            z += 1
-        if z >= data.shape[1]:
-            z = 0
-            raise StopIteration
-        if value is None:
+    if bounding_box_size is None:
+        [x, y, z] = [0, 0, 0]
+        while True:
+            x += 1
+            if x >= data.shape[3]:
+                x = 0
+                y += 1
+            if y >= data.shape[2]:
+                y = 0
+                z += 1
+            if z >= data.shape[1]:
+                z = 0
+                raise StopIteration
             yield [x, y, z]
-        else:
-            while data[0, z, y, x, 0] != value:
-                x += 1
-                if x >= data.shape[3]:
-                    x = 0
-                    y += 1
-                if y >= data.shape[2]:
-                    y = 0
-                    z += 1
-                if z >= data.shape[1]:
-                    z = 0
-                    raise StopIteration
-                yield [x, y, z]
+    else:
+        [H, W, L] = bounding_box_size
+        [x, y, z] = [L/2, W/2, H/2]
+        while True:
+            x += 1
+            if x >= data.shape[3]-L/2:
+                x = L/2
+                y += 1
+            if y >= data.shape[2]-W/2:
+                y = W/2
+                z += 1
+            if z >= data.shape[1]-H/2:
+                z = H/2
+                raise StopIteration
+            yield [x, y, z]
 
 
 def random_coords(data, value=None):
@@ -353,12 +400,6 @@ Evaluation
 ==========''')
     print('Loss: {}'.format(loss))
     print('Accuracy: {}'.format(accuracy))
-
-    # prediction = nn.predict(PREDICTION, bounding_box_size=(8, 16, 16))
-    # np.save('prediction/targets.npy', prediction)
-    # prediction = (prediction*65535).astype(np.uint16)
-    # print(prediction)
-    # save_tif('prediction/targets.tif', prediction)
 
     nn.save('model.h5')
 
