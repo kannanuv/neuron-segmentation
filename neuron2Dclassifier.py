@@ -382,7 +382,7 @@ Evaluation
     print('Loss: {}'.format(loss))
     print('Accuracy: {}'.format(accuracy))
 
-    nn.save('model.h5')
+    nn.save('model_2D.h5')
 
 
 def main():
